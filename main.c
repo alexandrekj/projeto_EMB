@@ -1,6 +1,8 @@
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "cmsis_os2.h" // CMSIS-RTOS
 
 // includes da biblioteca driverlib
@@ -12,63 +14,52 @@
 #include "utils/uartstdio.h"
 #include "system_TM4C1294.h"
 
-
-
-osThreadId_t tid_sRead;
-osThreadId_t tid_vControl;
-osThreadId_t tid_vDecision;
-osMutexId_t mutexUart;
-osMessageQueueId_t inpvControl_MsgQueue;
-osMessageQueueId_t outvControl_MsgQueue;
-
-
-void sRead(void *arg); 
-void vControl (void *argument);
-void vDecision (void *argument); 
-int32_t initObjects(void);
-
-
-#define MSGQUEUE_OBJTS 16
-#define BUFFER_SIZE 16
-#define FLAG1 1    // objeto na frente
-#define FLAG2 2    // limite da pista atingido (pela direita)
-#define FLAG3 4    // limite da pista atingido (pela esquerda)
-#define FLAG4 16    // saindo pela direita
-#define FLAG5 32    // saindo pela esquerda
-#define FLAG6 64    // caminho livre
-#define limitePista 15
-
-
-
-osThreadId_t tid_teste;
-osThreadId_t tid_recebeUart;
+//#define limitePista 15
+#define BUFFER_SIZE 24
 
 void enviaUART(char string[]);
+void UARTInit(void);
+void UART0_Handler(void);
+void initObjects(void);
+//void tratamentoDados(char buffer[BUFFER_SIZE]);
+void enviaUART(char string[]);
 
-#define BUFFER_SIZE 16
+osThreadId_t tid_vDecision;
+osThreadId_t tid_vControl;
+osThreadId_t tid_recebeUart;
+osThreadId_t tid_requisitaSensor;
+osMutexId_t mutex_uart;
+osMessageQueueId_t inputControl;
+osMessageQueueId_t outputControl;
+
+typedef enum tipoSensor
+{
+  LASER,
+  RFREQ,
+  NULO
+} tipoSensor;
+
+typedef enum tipoFlag
+{
+  OBJETO_DETECTADO,
+  SAIU_DIREITA,
+  SAIU_ESQUERDA,
+  CAMINHO_LIVRE,
+  SAIU_DO_LIMITE,
+} tipoFlag;
 
 
-typedef struct {
-  char* sensor[BUFFER_SIZE];
-  int32_t valor[BUFFER_SIZE];
-  int32_t idx;
-} MSGQUEUE_OBJ;
+typedef struct structSensor
+{
+  tipoSensor tipo;
+  float valor;
+} structSensor;
 
-typedef struct {
-  int32_t valor[BUFFER_SIZE];
-  
-} MSGQUEUE_OBJout;
-
-typedef struct {
-  char* comando[BUFFER_SIZE];
-  int32_t nrInstr;
-} structComando;
-
-
-
-//----------
-// UART definitions
-//extern void UARTStdioIntHandler(void);
+typedef struct decisaoCarro
+{
+  char comando[20];
+  uint8_t nro;
+} decisaoCarro;
 
 void UARTInit(void)
 {
@@ -97,258 +88,229 @@ void UART0_Handler(void)
 } // UART0_Handler
 //----------
 
-
-
-// Função initObjects
-// Faz a inicialização dos objetos (mutexes, tarefas, filas de mensagens)
-
-int32_t initObjects(void){
-  inpvControl_MsgQueue = osMessageQueueNew(MSGQUEUE_OBJTS, sizeof(MSGQUEUE_OBJTS), NULL);
-  if (inpvControl_MsgQueue == NULL) {
-    ; // Message Queue object not created, handle failure
-  }
-  
-  outvControl_MsgQueue = osMessageQueueNew(MSGQUEUE_OBJTS, sizeof(MSGQUEUE_OBJTS), NULL);
-  if (outvControl_MsgQueue == NULL) {
-    ; // Message Queue object not created, handle failure
-  }
-  
-  mutexUart = osMutexNew(NULL);
-  
-  tid_sRead = osThreadNew(sRead, NULL, NULL);
-  if (tid_sRead == NULL) {
-    return(-1);
-  }
-  
-  tid_vControl = osThreadNew(vControl, NULL, NULL);
-  if (tid_vControl == NULL) {
-    return(-1);
-  }
-  
-  tid_vDecision = osThreadNew(vDecision, NULL, NULL);
-  if (tid_vDecision == NULL) {
-    return(-1);
-  }
- return(0);
-}
-
-// Thread sRead
-// Input: Dados da uart a respeito da leitura dos sensores
-// Output: Escreve na UART solicitando os dados de leitura do sensor e envia periodicamente estes dados para a thread vControl por fila de mensagens
-
-void sRead(void *arg){
-  int32_t laser = 0, rfreq = 0;
-  char* dado = "";
-  char ch_rfreq[BUFFER_SIZE];
-  MSGQUEUE_OBJ msg;
-  uint32_t index_i = 0;
-  
-  while(1){
-
-    osMutexAcquire(mutexUart,osWaitForever);            // Leitura do sensor Laser
-    UARTprintf("Pl;");
-    UARTgets(dado,sizeof(dado));
-    laser = (int)dado;
-    osMutexRelease(mutexUart);
-    
-    msg.sensor[index_i] = "rfreq";
-    msg.valor[index_i] = rfreq;
-    msg.idx = index_i;
-    
-    osMessageQueuePut(inpvControl_MsgQueue, &msg, 0U, 0U);
-    
-    index_i++;
-    if(index_i >= BUFFER_SIZE)
-      index_i = 0;
-    
-    osMutexAcquire(mutexUart,osWaitForever);           // Leitura do sensor radio frequência
-    UARTprintf("Prf;");
-    UARTgets(dado,sizeof(dado));
-    osMutexRelease(mutexUart);
-    for(int i = 0; i <=sizeof(dado); i++){             // Pegando somente o valor da leitura
-      ch_rfreq[i] = dado[i+3]; 
-    }
-    rfreq = (int)ch_rfreq;                              // Converte somente o número da leitura
-    
-    msg.sensor[index_i] = "laser";
-    msg.valor[index_i] = laser;
-    msg.idx = index_i;
-    
-    index_i++;
-      if(index_i >= BUFFER_SIZE)
-        index_i = 0;
-    
-    osMessageQueuePut(inpvControl_MsgQueue, &msg, 0U, 0U);    
-  } // while
-}
-
-// Thread vControl
-// Input: Recebe a leitura dos sensores através de fila de mensagens da thread sRead
-// Output: Envia para a thread vDecision uma flag por fila de mensagens a respeito da melhor decisão de aceleração/rotação do carro com base nas leituras dos sensores
-
-void vControl(void *arg){
-  osStatus_t status;
-  MSGQUEUE_OBJ msg;
-  MSGQUEUE_OBJout msgout;
-  uint8_t index_o = 0;
-  uint32_t dado_laser = 0, dado_rfreq = 0;
-  uint8_t index_out = 0;
-
-  //Recebimento dos dados pela fila de mensagens
-  
-  while(1){
-  status = osMessageQueueGet(inpvControl_MsgQueue, &msg, NULL, 0U);   // wait for message
-    if (status == osOK) {
-      //index_o = msg.idx;                                      // precisa disso? ou puxa pelo index_o direto
-      if(msg.sensor[index_o] == "laser"){
-        dado_laser = msg.valor[index_o];
-      } else if(msg.sensor[index_o] == "rfreq"){
-          dado_rfreq = msg.valor[index_o];
-        }
-     index_o ++;
-     if(index_o >= BUFFER_SIZE)
-       index_o = 0;
-    }
-    
-    // Tratamento dos dados recebidos
-  
-    if(dado_laser != 0){
-      msgout.valor[index_out] = FLAG1;
-      }else if(dado_rfreq >= limitePista){
-        msgout.valor[index_out] = FLAG2;
-      } else if(dado_rfreq <= limitePista){
-        msgout.valor[index_out] = FLAG3;
-      } else if(dado_rfreq >= 5){
-        msgout.valor[index_out] = FLAG4;
-      } else if(dado_rfreq <= -5){
-        msgout.valor[index_out] = FLAG5;
-      } else {
-        msgout.valor[index_out] = FLAG6;
-      }   
-    
-      index_out++;
-      if(index_out >= BUFFER_SIZE)
-        index_out = 0;
-      
-    osMessageQueuePut(outvControl_MsgQueue, &msgout, 0U, 0U);
-      
-  } // while
-}
-
-// Thread vDecision
-// Input: Flag de comando setada pela thread vControl e transmitida através de fila de mensagens
-// Output Comando para a UART definindo aceleração e rotação do carro
-
-void vDecision(void *arg){
-  MSGQUEUE_OBJout msgout;
-  osStatus_t status;
-  uint8_t index_o = 0;
-  structComando com;
-  uint8_t index_c = 0;
-  // utlizar indices nos comandos?
-  
-  while(1){
-    
-    status = osMessageQueueGet(outvControl_MsgQueue, &msgout, NULL, 0U);   // wait for message
-    
-    com.nrInstr = 1;
-    if (status == osOK) { 
-      switch(msgout.valor[index_o]){
-      case FLAG1:
-        com.comando[index_c] = "E;V90;A2;";
-        com.comando[index_c + 1] = "E;V-90";
-        com.nrInstr = 2;
-        break;
-      case FLAG2:
-        com.comando[index_c] = "A-2;";          // preencher caractere ou string direto?
-        break;
-      case FLAG3:
-        com.comando[index_c] = "A-2;";
-        break;
-      case FLAG4:
-        com.comando[index_c] = "V-30;A2;";
-        break;
-      case FLAG5:
-        com.comando[index_c] = "V30;A2;";
-        break;
-      case FLAG6:
-        com.comando[index_c] = "A2;";
-        break;
-      default :
-        com.comando[index_c] = "A2;";
-        break;
-      } // switch case
-                    
-   osMutexAcquire(mutexUart, osWaitForever);
-   for(int i = 0; i <= index_c ; i++){
-      osMutexAcquire(mutexUart, osWaitForever);
-      UARTprintf("%s",com.comando[i]);
-      osMutexRelease(mutexUart);
-      osDelay(100);
-      }
-                 
-   } // if
-  } // while                        
-}
-
-
-
-void ThreadTeste(void *arg)
-{
-  //osStatus_t = status;
-  char leitura[BUFFER_SIZE];
-  char valorLeitura[BUFFER_SIZE];
-  
-  while(1)
-  { 
-    
-  UARTprintf("Prf;\r"); 
- /* 
-    switch(leitura[0])
-    {
-      case 'L':
-   
-        if(leitura[1] == 'I')
-        {
-          for(int i=0; i <= BUFFER_SIZE; i++)
-            valorLeitura[i] = leitura[i+2];
-        }
-      break;
-    default:
-      break;
-    }
-
-    */
-  osDelay(1000);  
-  }  
-}
-
-
-
 void recebeUart(void *arg)
 {
   char buffer[BUFFER_SIZE];
+  char dado[BUFFER_SIZE];
   uint8_t i = 0;
   uint8_t charRecebido = 0;
+  structSensor sensor;
+  uint8_t flagValido = 0;
 
   while(1)
   {
-    
+
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
-    
+
     do
     {
+      UARTFlushRx();
       charRecebido = UARTCharGet(UART0_BASE);
       buffer[i] = charRecebido;
-      i++;   
-    } while(charRecebido != '\n' || UARTCharsAvail(UART0_BASE) != 1);
+      i++;
+    } while(UARTCharsAvail(UART0_BASE));
+
+   switch(buffer[0])
+   {
+   case 'f':     
+     for(int i=1; i< strlen(buffer); i++)
+    {
+          dado[i-1] = buffer[i];
+    }
+    sensor.valor = atof(dado);
+    sensor.tipo = RFREQ;
+    flagValido = 1;
+    break;
+   case '0':
+     sensor.valor = 0;
+     sensor.tipo = LASER;
+     flagValido = 1;
+     break;
+   case '-':
+     if(buffer[1] == 1)
+     {
+     sensor.valor = -1;
+     sensor.tipo = LASER;
+     flagValido = 1;
+     } else
+     {
+       flagValido = 0;
+     }
+     break;
+   default:
+     flagValido = 0;
+     break;
+   }
+   
+   if(flagValido == 1) 
+   osMessageQueuePut(inputControl,&sensor,0,NULL);
     
-    //while(UARTCharsAvail(UART0_BASE)) UARTCharGet(UART0_BASE);
+   sensor.valor = NULL;
+   sensor.tipo = NULO;
     
-    enviaUART(buffer);
-    i = 0;
+   i = 0;
+   memset(buffer, 0, BUFFER_SIZE);
   }
 }
+
+void threadvControl(void *arg)
+{
+  osStatus_t status;
+  tipoFlag flag;
+  structSensor sensor;
+  uint8_t limitePista = 15;
+  
+  while(1)
+  {
+  status = osMessageQueueGet(inputControl, &sensor, NULL, NULL);
+  if(status == osOK)
+  {
+    if(sensor.tipo == LASER && sensor.valor == 0)
+    {
+      flag = CAMINHO_LIVRE;
+    }
+    else if(sensor.tipo == RFREQ && sensor.valor >= limitePista)
+    {
+      flag = SAIU_DO_LIMITE;
+    }
+    else if(sensor.tipo == RFREQ && sensor.valor < -5)
+    {
+      flag = SAIU_DIREITA;
+    }
+    else if(sensor.tipo == RFREQ && sensor.valor > 5)
+    {
+      flag = SAIU_ESQUERDA;
+    } 
+    else if(sensor.tipo == LASER && sensor.valor == 3)
+    {
+      flag = OBJETO_DETECTADO;
+    }
+  }
+  osMessageQueuePut(outputControl,&flag,0,NULL);
+  osDelay(250);
+  }
+}
+
+void threadvDecision(void *arg)
+{
+  osStatus_t  status;
+  decisaoCarro decisao;
+  char decisaoParcial[BUFFER_SIZE];
+  tipoFlag flag;
+
+  while(1)
+  {
+    status = osMessageQueueGet(outputControl,&flag,NULL,NULL);
+    if(status == osOK)
+    {
+      switch(flag)
+      {
+        case OBJETO_DETECTADO:
+          decisao.nro = 5;
+          decisao.comando[1]='E';
+          decisao.comando[2]=';';
+          decisao.comando[3]='V';
+          decisao.comando[4]='9';
+          decisao.comando[5]='0';
+          decisao.comando[6]=';';
+          decisao.comando[7]='A';
+          decisao.comando[8]='2';
+          decisao.comando[9]=';';
+          decisao.comando[10]='E';
+          decisao.comando[11]=';';
+          decisao.comando[12]='V';
+          decisao.comando[13]='-';
+          decisao.comando[14]='9';
+          decisao.comando[15]='0';
+          decisao.comando[16]=';';
+          break;
+        case SAIU_DO_LIMITE:
+          decisao.nro = 1;
+          decisao.comando[1]='A';
+          decisao.comando[2]='-';
+          decisao.comando[3]='5';
+          decisao.comando[4]=';';
+          break;
+        case SAIU_DIREITA:
+          decisao.nro = 2;
+          decisao.comando[1]='V';
+          decisao.comando[2]='-';
+          decisao.comando[3]='3';
+          decisao.comando[4]='0';
+          decisao.comando[5]=';';
+          decisao.comando[6]='A';
+          decisao.comando[7]='2';
+          decisao.comando[8]=';';
+          break;
+        case SAIU_ESQUERDA:
+          decisao.nro = 2;
+          decisao.comando[1]='V';
+          decisao.comando[2]='-';
+          decisao.comando[3]='3';
+          decisao.comando[4]='0';
+          decisao.comando[5]=';';
+          decisao.comando[1]='A';
+          decisao.comando[2]='2';
+          decisao.comando[3]=';';
+          break;
+        case CAMINHO_LIVRE:
+          decisao.nro = 1;
+          decisao.comando[1]='A';
+          decisao.comando[2]='2';
+          decisao.comando[3]=';';
+      }
+            
+        if(decisao.nro == 5)
+        {
+            for(int i=0; i <= decisao.nro-3; i++)
+            {
+                decisaoParcial[i]=decisao.comando[i];
+            }
+          osMutexAcquire(mutex_uart,osWaitForever);
+          enviaUART(decisaoParcial);
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
+          osDelay(1000);
+
+            int j = 0;
+            for(int i=decisao.nro-3; i<= decisao.nro; i++)
+            {
+                  decisaoParcial[j]=decisao.comando[i];
+                  j++;
+            }
+          osMutexAcquire(mutex_uart,osWaitForever);
+          enviaUART(decisaoParcial);
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
+        }
+
+        osMutexAcquire(mutex_uart,osWaitForever);
+        enviaUART(decisao.comando);
+        UARTFlushTx(false);
+        osMutexRelease(mutex_uart);
+    }
+  osDelay(500);
+  } // while
+}
+
+void requisitaSensor(void *arg)
+{  
+  while(1)
+  {
+        for(int i=0; i<=2;i++)
+        {
+          osMutexAcquire(mutex_uart,osWaitForever);
+          if(i==0) enviaUART("Pl;");
+          UARTFlushTx(false);
+          if(i==1) enviaUART("Prf;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
+          osDelay(200);
+        }
+   osDelay(200);   
+  }  
+}
+
 
 void enviaUART(char string[])
 {
@@ -358,6 +320,23 @@ void enviaUART(char string[])
    }
 }
 
+void initObjects(void)
+{
+  inputControl = osMessageQueueNew(20, sizeof(structSensor), NULL);
+
+  outputControl = osMessageQueueNew(20, sizeof(tipoFlag), NULL);
+  
+  mutex_uart = osMutexNew(NULL);
+
+  tid_vControl = osThreadNew(threadvControl, NULL, NULL);
+
+  tid_vDecision = osThreadNew(threadvDecision, NULL, NULL);
+
+  tid_recebeUart = osThreadNew(recebeUart, NULL, NULL);
+  
+  tid_requisitaSensor = osThreadNew(requisitaSensor, NULL,NULL);
+  
+}
 
 void main(void)
 {
@@ -365,9 +344,6 @@ void main(void)
   osKernelInitialize();
   initObjects();
 
-  tid_teste = osThreadNew(ThreadTeste, NULL, NULL);
-  tid_recebeUart = osThreadNew(recebeUart, NULL, NULL);
-  
   if(osKernelGetState() == osKernelReady)
     osKernelStart();
 
