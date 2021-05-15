@@ -59,6 +59,7 @@ typedef struct decisaoCarro
 {
   char comando[20];
   uint8_t nro;
+  uint8_t delay;
 } decisaoCarro;
 
 void UARTInit(void)
@@ -117,10 +118,10 @@ void recebeUart(void *arg)
     {
           dado[i-1] = buffer[i];
     }
-    sensor.valor = atof(dado);
+    sensor.valor = strtod(dado,NULL);
     sensor.tipo = RFREQ;
     flagValido = 1;
-    break;
+    break; 
    case '0':
      sensor.valor = 0;
      sensor.tipo = LASER;
@@ -129,7 +130,7 @@ void recebeUart(void *arg)
    case '-':
      if(buffer[1] == 1)
      {
-     sensor.valor = -1;
+     sensor.valor = 3;
      sensor.tipo = LASER;
      flagValido = 1;
      } else
@@ -142,11 +143,9 @@ void recebeUart(void *arg)
      break;
    }
    
-   if(flagValido == 1) 
+   if(flagValido == 0)
+     sensor.tipo = NULO;
    osMessageQueuePut(inputControl,&sensor,0,NULL);
-    
-   sensor.valor = NULL;
-   sensor.tipo = NULO;
     
    i = 0;
    memset(buffer, 0, BUFFER_SIZE);
@@ -159,45 +158,53 @@ void threadvControl(void *arg)
   tipoFlag flag;
   structSensor sensor;
   uint8_t limitePista = 15;
+  flag = CAMINHO_LIVRE;
   
   while(1)
   {
   status = osMessageQueueGet(inputControl, &sensor, NULL, NULL);
   if(status == osOK)
   {
-    if(sensor.tipo == LASER && sensor.valor == 0)
+    switch(sensor.tipo)
     {
-      flag = CAMINHO_LIVRE;
-    }
-    else if(sensor.tipo == RFREQ && sensor.valor >= limitePista)
-    {
-      flag = SAIU_DO_LIMITE;
-    }
-    else if(sensor.tipo == RFREQ && sensor.valor < -5)
-    {
-      flag = SAIU_DIREITA;
-    }
-    else if(sensor.tipo == RFREQ && sensor.valor > 5)
-    {
-      flag = SAIU_ESQUERDA;
-    } 
-    else if(sensor.tipo == LASER && sensor.valor == 3)
-    {
-      flag = OBJETO_DETECTADO;
-    }
+    case LASER:
+      if(sensor.valor == 0)
+      {
+        flag = CAMINHO_LIVRE;
+      }
+      else if(sensor.valor == 3)
+      {
+        flag = OBJETO_DETECTADO;
+      }
+      break;
+    case RFREQ:
+      if(sensor.valor >= limitePista)
+      {
+        flag = SAIU_DO_LIMITE;
+      }
+      else if(sensor.valor >= 3)
+      {
+        flag = SAIU_ESQUERDA;
+      }
+      else if(sensor.valor <= 3)
+      {
+        flag = SAIU_DIREITA;
+      }
+      break;    
   }
   osMessageQueuePut(outputControl,&flag,0,NULL);
-  osDelay(250);
   }
+  osDelay(100);
+}
 }
 
 void threadvDecision(void *arg)
 {
   osStatus_t  status;
   decisaoCarro decisao;
-  char decisaoParcial[BUFFER_SIZE];
   tipoFlag flag;
-
+  
+  flag = CAMINHO_LIVRE;
   while(1)
   {
     status = osMessageQueueGet(outputControl,&flag,NULL,NULL);
@@ -206,92 +213,108 @@ void threadvDecision(void *arg)
       switch(flag)
       {
         case OBJETO_DETECTADO:
+          decisao.delay = 3;
           decisao.nro = 5;
-          decisao.comando[1]='E';
+          osMutexAcquire(mutex_uart,osWaitForever);
+          decisao.comando[0]='E';
+          decisao.comando[1]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='V';
+          decisao.comando[1]='9';
+          decisao.comando[2]='0';
+          decisao.comando[3]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='A';
+          decisao.comando[1]='2';
           decisao.comando[2]=';';
-          decisao.comando[3]='V';
-          decisao.comando[4]='9';
-          decisao.comando[5]='0';
-          decisao.comando[6]=';';
-          decisao.comando[7]='A';
-          decisao.comando[8]='2';
-          decisao.comando[9]=';';
-          decisao.comando[10]='E';
-          decisao.comando[11]=';';
-          decisao.comando[12]='V';
-          decisao.comando[13]='-';
-          decisao.comando[14]='9';
-          decisao.comando[15]='0';
-          decisao.comando[16]=';';
+          osDelay(300);
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='E';
+          decisao.comando[1]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='V';
+          decisao.comando[1]='-';
+          decisao.comando[2]='9';
+          decisao.comando[3]='0';
+          decisao.comando[4]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
         case SAIU_DO_LIMITE:
           decisao.nro = 1;
-          decisao.comando[1]='A';
-          decisao.comando[2]='-';
-          decisao.comando[3]='5';
-          decisao.comando[4]=';';
+          osMutexAcquire(mutex_uart,osWaitForever);
+          decisao.comando[0]='A';
+          decisao.comando[1]='-';
+          decisao.comando[2]='5';
+          decisao.comando[3]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
           break;
         case SAIU_DIREITA:
           decisao.nro = 2;
-          decisao.comando[1]='V';
-          decisao.comando[2]='-';
-          decisao.comando[3]='3';
-          decisao.comando[4]='0';
-          decisao.comando[5]=';';
-          decisao.comando[6]='A';
-          decisao.comando[7]='2';
-          decisao.comando[8]=';';
+          decisao.delay = 0;
+          osMutexAcquire(mutex_uart,osWaitForever);
+          decisao.comando[0]='V';
+          decisao.comando[1]='-';
+          decisao.comando[2]='3';
+          decisao.comando[3]='0';
+          decisao.comando[4]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='A';
+          decisao.comando[1]='2';
+          decisao.comando[2]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
           break;
         case SAIU_ESQUERDA:
           decisao.nro = 2;
-          decisao.comando[1]='V';
-          decisao.comando[2]='-';
-          decisao.comando[3]='3';
-          decisao.comando[4]='0';
-          decisao.comando[5]=';';
-          decisao.comando[1]='A';
-          decisao.comando[2]='2';
-          decisao.comando[3]=';';
+          decisao.delay = 0;
+          osMutexAcquire(mutex_uart,osWaitForever);
+          decisao.comando[0]='V';
+          decisao.comando[1]='-';
+          decisao.comando[2]='3';
+          decisao.comando[3]='0';
+          decisao.comando[4]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          decisao.comando[0]='A';
+          decisao.comando[1]='2';
+          decisao.comando[2]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
           break;
         case CAMINHO_LIVRE:
           decisao.nro = 1;
-          decisao.comando[1]='A';
-          decisao.comando[2]='2';
-          decisao.comando[3]=';';
-      }
-            
-        if(decisao.nro == 5)
-        {
-            for(int i=0; i <= decisao.nro-3; i++)
-            {
-                decisaoParcial[i]=decisao.comando[i];
-            }
+          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          enviaUART(decisaoParcial);
-          UARTFlushTx(false);
-          osMutexRelease(mutex_uart);
-          osDelay(1000);
-
-            int j = 0;
-            for(int i=decisao.nro-3; i<= decisao.nro; i++)
-            {
-                  decisaoParcial[j]=decisao.comando[i];
-                  j++;
-            }
+          decisao.comando[0]='A';
+          decisao.comando[1]='2';
+          decisao.comando[2]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          break;
+      default:
+          decisao.nro = 1;
+          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          enviaUART(decisaoParcial);
-          UARTFlushTx(false);
-          osMutexRelease(mutex_uart);
-        }
-
-        osMutexAcquire(mutex_uart,osWaitForever);
-        enviaUART(decisao.comando);
-        UARTFlushTx(false);
-        osMutexRelease(mutex_uart);
-    }
-  osDelay(500);
+          decisao.comando[0]='E';
+          decisao.comando[1]=';';
+          enviaUART(decisao.comando);
+          memset(decisao.comando,0,BUFFER_SIZE);
+          break;
+      }  
+      memset(decisao.comando,0,BUFFER_SIZE);
+      }        
   } // while
-}
+} // if
+
 
 void requisitaSensor(void *arg)
 {  
