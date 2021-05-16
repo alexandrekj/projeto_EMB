@@ -23,6 +23,9 @@ void UART0_Handler(void);
 void initObjects(void);
 //void tratamentoDados(char buffer[BUFFER_SIZE]);
 void enviaUART(char string[]);
+void requisitaRfreq(void);
+void requisitaLaser(void);
+
 
 osThreadId_t tid_vDecision;
 osThreadId_t tid_vControl;
@@ -89,6 +92,8 @@ void UART0_Handler(void)
 } // UART0_Handler
 //----------
 
+
+
 void recebeUart(void *arg)
 {
   char buffer[BUFFER_SIZE];
@@ -102,21 +107,26 @@ void recebeUart(void *arg)
   {
 
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+    osDelay(200);
+//    osMutexAcquire(mutex_uart,osWaitForever);
+    UARTFlushRx();
 
     do
     {
-      UARTFlushRx();
+      //UARTFlushRx();
       charRecebido = UARTCharGet(UART0_BASE);
       buffer[i] = charRecebido;
       i++;
     } while(UARTCharsAvail(UART0_BASE));
-
+    
+//   osMutexRelease(mutex_uart);
+   
    switch(buffer[0])
    {
-   case 'f':     
-     for(int i=1; i< strlen(buffer); i++)
+   case 'L':     
+     for(int i=3; i< strlen(buffer); i++)
     {
-          dado[i-1] = buffer[i];
+          dado[i-3] = buffer[i];
     }
     sensor.valor = strtod(dado,NULL);
     sensor.tipo = RFREQ;
@@ -186,11 +196,21 @@ void threadvControl(void *arg)
       {
         flag = SAIU_ESQUERDA;
       }
-      else if(sensor.valor <= 3)
+      else if(sensor.valor <= -3)
       {
         flag = SAIU_DIREITA;
       }
-      break;    
+      else
+      {
+        flag = CAMINHO_LIVRE;
+      }
+      break;   
+    case NULO:
+        flag = CAMINHO_LIVRE;
+      break;
+    default:
+        flag = CAMINHO_LIVRE;
+      break;
   }
   osMessageQueuePut(outputControl,&flag,0,NULL);
   }
@@ -201,10 +221,8 @@ void threadvControl(void *arg)
 void threadvDecision(void *arg)
 {
   osStatus_t  status;
-  decisaoCarro decisao;
   tipoFlag flag;
   
-  flag = CAMINHO_LIVRE;
   while(1)
   {
     status = osMessageQueueGet(outputControl,&flag,NULL,NULL);
@@ -213,126 +231,92 @@ void threadvDecision(void *arg)
       switch(flag)
       {
         case OBJETO_DETECTADO:
-          decisao.delay = 3;
-          decisao.nro = 5;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='E';
-          decisao.comando[1]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='V';
-          decisao.comando[1]='9';
-          decisao.comando[2]='0';
-          decisao.comando[3]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='A';
-          decisao.comando[1]='2';
-          decisao.comando[2]=';';
+          enviaUART("E;");
+          enviaUART("V90;");
+          enviaUART("A2;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           osDelay(300);
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='E';
-          decisao.comando[1]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='V';
-          decisao.comando[1]='-';
-          decisao.comando[2]='9';
-          decisao.comando[3]='0';
-          decisao.comando[4]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          osMutexAcquire(mutex_uart,osWaitForever);
+          enviaUART("A2;");
+          enviaUART("E;");
+          enviaUART("V-90;");
           UARTFlushTx(false);
           osMutexRelease(mutex_uart);
           break;
         case SAIU_DO_LIMITE:
-          decisao.nro = 1;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='A';
-          decisao.comando[1]='-';
-          decisao.comando[2]='5';
-          decisao.comando[3]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          enviaUART("A-5;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
         case SAIU_DIREITA:
-          decisao.nro = 2;
-          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='V';
-          decisao.comando[1]='-';
-          decisao.comando[2]='3';
-          decisao.comando[3]='0';
-          decisao.comando[4]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='A';
-          decisao.comando[1]='2';
-          decisao.comando[2]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          enviaUART("V-30;");
+          enviaUART("A2;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
         case SAIU_ESQUERDA:
-          decisao.nro = 2;
-          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='V';
-          decisao.comando[1]='-';
-          decisao.comando[2]='3';
-          decisao.comando[3]='0';
-          decisao.comando[4]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
-          decisao.comando[0]='A';
-          decisao.comando[1]='2';
-          decisao.comando[2]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          enviaUART("V-30;");
+          enviaUART("A2;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
         case CAMINHO_LIVRE:
-          decisao.nro = 1;
-          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='A';
-          decisao.comando[1]='2';
-          decisao.comando[2]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          enviaUART("A2;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
       default:
-          decisao.nro = 1;
-          decisao.delay = 0;
           osMutexAcquire(mutex_uart,osWaitForever);
-          decisao.comando[0]='E';
-          decisao.comando[1]=';';
-          enviaUART(decisao.comando);
-          memset(decisao.comando,0,BUFFER_SIZE);
+          enviaUART("A1;");
+          UARTFlushTx(false);
+          osMutexRelease(mutex_uart);
           break;
-      }  
-      memset(decisao.comando,0,BUFFER_SIZE);
+      } 
       }        
   } // while
 } // if
 
+/*
+
+void requisitaLaser(void)
+{
+  osMutexAcquire(mutex_uart,osWaitForever);
+  UARTFlushTx(false);
+  enviaUART("Pl;");
+  osMutexRelease(mutex_uart);  
+}
+
+void requisitaRfreq(void)
+{
+  osMutexAcquire(mutex_uart,osWaitForever);
+  UARTFlushTx(false);
+  enviaUART("Prf;");
+  osMutexRelease(mutex_uart);     
+}
+                 
+
+*/
 
 void requisitaSensor(void *arg)
 {  
   while(1)
   {
-        for(int i=0; i<=2;i++)
-        {
-          osMutexAcquire(mutex_uart,osWaitForever);
-          if(i==0) enviaUART("Pl;");
-          UARTFlushTx(false);
-          if(i==1) enviaUART("Prf;");
-          UARTFlushTx(false);
-          osMutexRelease(mutex_uart);
-          osDelay(200);
-        }
-   osDelay(200);   
-  }  
+        
+    osMutexAcquire(mutex_uart,osWaitForever);
+    enviaUART("Prf;");
+    UARTFlushTx(false);
+    osMutexRelease(mutex_uart);    
+    //      if(i==0) enviaUART("Pl;");
+    osDelay(200);    
+  } 
 }
+
 
 
 void enviaUART(char string[])
