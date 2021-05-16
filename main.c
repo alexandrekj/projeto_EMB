@@ -89,6 +89,8 @@ void UART0_Handler(void)
 } // UART0_Handler
 //----------
 
+
+
 void recebeUart(void *arg)
 {
   char buffer[BUFFER_SIZE];
@@ -323,7 +325,7 @@ void requisitaSensor(void *arg)
         for(int i=0; i<=2;i++)
         {
           osMutexAcquire(mutex_uart,osWaitForever);
-          if(i==0) enviaUART("Pl;");
+    //      if(i==0) enviaUART("Pl;");
           UARTFlushTx(false);
           if(i==1) enviaUART("Prf;");
           UARTFlushTx(false);
@@ -333,7 +335,6 @@ void requisitaSensor(void *arg)
    osDelay(200);   
   }  
 }
-
 
 void enviaUART(char string[])
 {
