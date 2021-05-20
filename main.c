@@ -107,23 +107,18 @@ void recebeUart(void *arg)
   {
 
     osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
-    osDelay(200);
-//    osMutexAcquire(mutex_uart,osWaitForever);
-    UARTFlushRx();
+//    UARTFlushRx();
 
     do
     {
-      //UARTFlushRx();
       charRecebido = UARTCharGet(UART0_BASE);
       buffer[i] = charRecebido;
       i++;
     } while(UARTCharsAvail(UART0_BASE));
-    
-//   osMutexRelease(mutex_uart);
-   
-   switch(buffer[0])
+        
+   switch(buffer[1])
    {
-   case 'L':     
+   case 'r':                                    // sensor de radio frequência     
      for(int i=3; i< strlen(buffer); i++)
     {
           dado[i-3] = buffer[i];
@@ -132,33 +127,29 @@ void recebeUart(void *arg)
     sensor.tipo = RFREQ;
     flagValido = 1;
     break; 
-   case '0':
-     sensor.valor = 0;
+   case 'l':                                    // sensor Laser
      sensor.tipo = LASER;
-     flagValido = 1;
-     break;
-   case '-':
-     if(buffer[1] == 1)
+     if(buffer[2] == '-')
      {
-     sensor.valor = 3;
-     sensor.tipo = LASER;
-     flagValido = 1;
-     } else
+       sensor.valor = 1;                       // caminho livre
+     } 
+     else 
      {
-       flagValido = 0;
-     }
+        sensor.valor = 3;                       //caminho bloqueado
+     }    
+     flagValido = 1;
      break;
    default:
      flagValido = 0;
      break;
    }
    
-   if(flagValido == 0)
-     sensor.tipo = NULO;
-   osMessageQueuePut(inputControl,&sensor,0,NULL);
-    
-   i = 0;
    memset(buffer, 0, BUFFER_SIZE);
+   i = 0;
+   
+   if(flagValido == 1)
+     osMessageQueuePut(inputControl,&sensor,0,NULL);
+    
   }
 }
 
@@ -167,8 +158,7 @@ void threadvControl(void *arg)
   osStatus_t status;
   tipoFlag flag;
   structSensor sensor;
-  uint8_t limitePista = 15;
-  flag = CAMINHO_LIVRE;
+  float limitePista = 15;
   
   while(1)
   {
@@ -178,7 +168,7 @@ void threadvControl(void *arg)
     switch(sensor.tipo)
     {
     case LASER:
-      if(sensor.valor == 0)
+      if(sensor.valor == 1)
       {
         flag = CAMINHO_LIVRE;
       }
@@ -188,22 +178,13 @@ void threadvControl(void *arg)
       }
       break;
     case RFREQ:
+      flag = CAMINHO_LIVRE;
       if(sensor.valor >= limitePista)
-      {
-        flag = SAIU_DO_LIMITE;
-      }
-      else if(sensor.valor >= 3)
-      {
-        flag = SAIU_ESQUERDA;
-      }
-      else if(sensor.valor <= -3)
-      {
+          flag = SAIU_DO_LIMITE;
+      if(sensor.valor >= 3)
+          flag = SAIU_ESQUERDA;
+      if(sensor.valor <= -3)
         flag = SAIU_DIREITA;
-      }
-      else
-      {
-        flag = CAMINHO_LIVRE;
-      }
       break;   
     case NULO:
         flag = CAMINHO_LIVRE;
@@ -214,7 +195,6 @@ void threadvControl(void *arg)
   }
   osMessageQueuePut(outputControl,&flag,0,NULL);
   }
-  osDelay(100);
 }
 }
 
@@ -222,6 +202,11 @@ void threadvDecision(void *arg)
 {
   osStatus_t  status;
   tipoFlag flag;
+  
+  osMutexAcquire(mutex_uart,osWaitForever);
+  enviaUART("A2;");
+  UARTFlushTx(false);
+  osMutexRelease(mutex_uart);  
   
   while(1)
   {
@@ -254,26 +239,20 @@ void threadvDecision(void *arg)
         case SAIU_DIREITA:
           osMutexAcquire(mutex_uart,osWaitForever);
           enviaUART("V-30;");
-          enviaUART("A2;");
           UARTFlushTx(false);
           osMutexRelease(mutex_uart);
           break;
         case SAIU_ESQUERDA:
           osMutexAcquire(mutex_uart,osWaitForever);
           enviaUART("V-30;");
-          enviaUART("A2;");
           UARTFlushTx(false);
           osMutexRelease(mutex_uart);
           break;
         case CAMINHO_LIVRE:
-          osMutexAcquire(mutex_uart,osWaitForever);
-          enviaUART("A2;");
-          UARTFlushTx(false);
-          osMutexRelease(mutex_uart);
           break;
       default:
           osMutexAcquire(mutex_uart,osWaitForever);
-          enviaUART("A1;");
+          enviaUART("E;");             //teste
           UARTFlushTx(false);
           osMutexRelease(mutex_uart);
           break;
@@ -281,27 +260,6 @@ void threadvDecision(void *arg)
       }        
   } // while
 } // if
-
-/*
-
-void requisitaLaser(void)
-{
-  osMutexAcquire(mutex_uart,osWaitForever);
-  UARTFlushTx(false);
-  enviaUART("Pl;");
-  osMutexRelease(mutex_uart);  
-}
-
-void requisitaRfreq(void)
-{
-  osMutexAcquire(mutex_uart,osWaitForever);
-  UARTFlushTx(false);
-  enviaUART("Prf;");
-  osMutexRelease(mutex_uart);     
-}
-                 
-
-*/
 
 void requisitaSensor(void *arg)
 {  
@@ -316,8 +274,6 @@ void requisitaSensor(void *arg)
     osDelay(200);    
   } 
 }
-
-
 
 void enviaUART(char string[])
 {
@@ -341,8 +297,7 @@ void initObjects(void)
 
   tid_recebeUart = osThreadNew(recebeUart, NULL, NULL);
   
-  tid_requisitaSensor = osThreadNew(requisitaSensor, NULL,NULL);
-  
+  tid_requisitaSensor = osThreadNew(requisitaSensor, NULL,NULL); 
 }
 
 void main(void)
